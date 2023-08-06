@@ -456,101 +456,81 @@
 <span id="456">456</span>
 <span id="457">457</span>
 <span id="458">458</span>
-<span id="459">459</span>
-<span id="460">460</span>
-<span id="461">461</span>
-<span id="462">462</span>
-<span id="463">463</span>
-<span id="464">464</span>
-<span id="465">465</span>
-<span id="466">466</span>
-<span id="467">467</span>
-<span id="468">468</span>
-<span id="469">469</span>
-<span id="470">470</span>
-<span id="471">471</span>
-<span id="472">472</span>
-<span id="473">473</span>
-<span id="474">474</span>
-<span id="475">475</span>
-<span id="476">476</span>
-<span id="477">477</span>
-<span id="478">478</span>
-<span id="479">479</span>
-<span id="480">480</span>
-<span id="481">481</span>
-<span id="482">482</span>
-<span id="483">483</span>
-<span id="484">484</span>
-<span id="485">485</span>
-<span id="486">486</span>
-<span id="487">487</span>
-<span id="488">488</span>
-<span id="489">489</span>
-<span id="490">490</span>
-<span id="491">491</span>
-<span id="492">492</span>
-<span id="493">493</span>
-<span id="494">494</span>
-<span id="495">495</span>
-<span id="496">496</span>
-</pre><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, rc::Rc};
+</pre><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, hash::Hash};
 
 <span class="kw">use </span>halo2_proofs::{
     arithmetic::Field,
-    circuit::{Layouter, Region, Value},
-    halo2curves::FieldExt,
+    circuit::{Cell, Layouter, Region, RegionIndex, SimpleFloorPlanner, Value},
     plonk::{
-        Advice, Column, ConstraintSystem, Expression, FirstPhase, Fixed, SecondPhase, ThirdPhase,
-        VirtualCells,
+        Advice, Any, Circuit <span class="kw">as </span>h2Circuit, Column, ConstraintSystem, Error, Expression, FirstPhase,
+        Fixed, Instance, SecondPhase, ThirdPhase, VirtualCells,
     },
     poly::Rotation,
 };
 
 <span class="kw">use crate</span>::{
-    ast::{query::Queriable, ForwardSignal, InternalSignal, StepType, ToField},
-    compiler::{
-        cell_manager::Placement, step_selector::StepSelector, FixedGenContext, TraceContext,
-        WitnessGenContext,
-    },
-    dsl::StepTypeHandler,
+    ast::ToField,
     ir::{
+        assignments::Assignments,
+        sc::{SuperAssignments, SuperCircuit},
         Circuit, Column <span class="kw">as </span>cColumn,
         ColumnType::{Advice <span class="kw">as </span>cAdvice, Fixed <span class="kw">as </span>cFixed, Halo2Advice, Halo2Fixed},
         PolyExpr,
     },
+    util::UUID,
 };
 
 <span class="attribute">#[allow(non_snake_case)]
-</span><span class="kw">pub fn </span>chiquito2Halo2&lt;F: FieldExt, TraceArgs, StepArgs: Clone&gt;(
-    circuit: Circuit&lt;F, TraceArgs, StepArgs&gt;,
-) -&gt; ChiquitoHalo2&lt;F, TraceArgs, StepArgs&gt; {
+</span><span class="kw">pub fn </span>chiquito2Halo2&lt;F: Field + From&lt;u64&gt; + Hash&gt;(circuit: Circuit&lt;F&gt;) -&gt; ChiquitoHalo2&lt;F&gt; {
     ChiquitoHalo2::new(circuit)
 }
 
-<span class="attribute">#[derive(Clone, Debug)]
-</span><span class="kw">pub struct </span>ChiquitoHalo2&lt;F: Field, TraceArgs, StepArgs: Clone&gt; {
-    <span class="kw">pub </span>debug: bool,
-
-    circuit: Circuit&lt;F, TraceArgs, StepArgs&gt;,
-
-    advice_columns: HashMap&lt;u32, Column&lt;Advice&gt;&gt;,
-    fixed_columns: HashMap&lt;u32, Column&lt;Fixed&gt;&gt;,
+<span class="attribute">#[allow(non_snake_case)]
+</span><span class="kw">pub fn </span>chiquitoSuperCircuit2Halo2&lt;F: Field + From&lt;u64&gt; + Hash, MappingArgs&gt;(
+    super_circuit: <span class="kw-2">&amp;</span>SuperCircuit&lt;F, MappingArgs&gt;,
+) -&gt; Vec&lt;ChiquitoHalo2&lt;F&gt;&gt; {
+    super_circuit
+        .get_sub_circuits()
+        .iter()
+        .map(|c| chiquito2Halo2((<span class="kw-2">*</span>c).clone()))
+        .collect()
 }
 
-<span class="kw">impl</span>&lt;F: FieldExt, TraceArgs, StepArgs: Clone&gt; ChiquitoHalo2&lt;F, TraceArgs, StepArgs&gt; {
-    <span class="kw">pub fn </span>new(circuit: Circuit&lt;F, TraceArgs, StepArgs&gt;) -&gt; ChiquitoHalo2&lt;F, TraceArgs, StepArgs&gt; {
+<span class="attribute">#[derive(Clone, Debug, Default)]
+</span><span class="kw">pub struct </span>ChiquitoHalo2&lt;F: Field + From&lt;u64&gt;&gt; {
+    <span class="kw">pub </span>debug: bool,
+
+    circuit: Circuit&lt;F&gt;,
+
+    advice_columns: HashMap&lt;UUID, Column&lt;Advice&gt;&gt;,
+    fixed_columns: HashMap&lt;UUID, Column&lt;Fixed&gt;&gt;,
+    instance_column: <span class="prelude-ty">Option</span>&lt;Column&lt;Instance&gt;&gt;,
+
+    ir_id: UUID,
+}
+
+<span class="kw">impl</span>&lt;F: Field + From&lt;u64&gt; + Hash&gt; ChiquitoHalo2&lt;F&gt; {
+    <span class="kw">pub fn </span>new(circuit: Circuit&lt;F&gt;) -&gt; ChiquitoHalo2&lt;F&gt; {
+        <span class="kw">let </span>ir_id = circuit.id;
         ChiquitoHalo2 {
             debug: <span class="bool-val">true</span>,
             circuit,
             advice_columns: Default::default(),
             fixed_columns: Default::default(),
+            instance_column: Default::default(),
+            ir_id,
         }
     }
 
     <span class="kw">pub fn </span>configure(<span class="kw-2">&amp;mut </span><span class="self">self</span>, meta: <span class="kw-2">&amp;mut </span>ConstraintSystem&lt;F&gt;) {
-        <span class="kw">let </span><span class="kw-2">mut </span>advice_columns = HashMap::&lt;u32, Column&lt;Advice&gt;&gt;::new();
-        <span class="kw">let </span><span class="kw-2">mut </span>fixed_columns = HashMap::&lt;u32, Column&lt;Fixed&gt;&gt;::new();
+        <span class="self">self</span>.configure_columns_sub_circuit(meta);
+
+        <span class="self">self</span>.configure_sub_circuit(meta);
+    }
+
+    <span class="kw">fn </span>configure_columns_sub_circuit(<span class="kw-2">&amp;mut </span><span class="self">self</span>, meta: <span class="kw-2">&amp;mut </span>ConstraintSystem&lt;F&gt;) {
+        <span class="kw">let </span><span class="kw-2">mut </span>advice_columns = HashMap::&lt;UUID, Column&lt;Advice&gt;&gt;::new();
+        <span class="kw">let </span><span class="kw-2">mut </span>fixed_columns = HashMap::&lt;UUID, Column&lt;Fixed&gt;&gt;::new();
 
         <span class="kw">for </span>column <span class="kw">in </span><span class="self">self</span>.circuit.columns.iter() {
             <span class="kw">match </span>column.ctype {
@@ -589,6 +569,12 @@
 
         <span class="self">self</span>.advice_columns = advice_columns;
         <span class="self">self</span>.fixed_columns = fixed_columns;
+    }
+
+    <span class="kw">pub fn </span>configure_sub_circuit(<span class="kw-2">&amp;mut </span><span class="self">self</span>, meta: <span class="kw-2">&amp;mut </span>ConstraintSystem&lt;F&gt;) {
+        <span class="kw">if </span>!<span class="self">self</span>.circuit.exposed.is_empty() {
+            <span class="self">self</span>.instance_column = <span class="prelude-val">Some</span>(meta.instance_column());
+        }
 
         <span class="kw">if </span>!<span class="self">self</span>.circuit.polys.is_empty() {
             meta.create_gate(<span class="string">&quot;main&quot;</span>, |meta| {
@@ -619,78 +605,58 @@
         }
     }
 
-    <span class="kw">pub fn </span>synthesize(<span class="kw-2">&amp;</span><span class="self">self</span>, layouter: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Layouter&lt;F&gt;, args: TraceArgs) {
-        <span class="kw">let </span>(advice_assignments, height) = <span class="self">self</span>.synthesize_advice(args);
-
+    <span class="kw">pub fn </span>synthesize(<span class="kw-2">&amp;</span><span class="self">self</span>, layouter: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Layouter&lt;F&gt;, witness: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Assignments&lt;F&gt;&gt;) {
         <span class="kw">let _ </span>= layouter.assign_region(
             || <span class="string">&quot;circuit&quot;</span>,
             |<span class="kw-2">mut </span>region| {
                 <span class="self">self</span>.annotate_circuit(<span class="kw-2">&amp;mut </span>region);
 
-                <span class="kw">let </span>fixed_assignments = <span class="self">self</span>.synthesize_fixed();
-                <span class="kw">for </span>(column, offset, value) <span class="kw">in </span>fixed_assignments.iter() {
-                    region.assign_fixed(|| <span class="string">&quot;&quot;</span>, <span class="kw-2">*</span>column, <span class="kw-2">*</span>offset, || <span class="kw-2">*</span>value)<span class="question-mark">?</span>;
-                }
+                <span class="self">self</span>.assign_fixed(<span class="kw-2">&amp;mut </span>region, <span class="kw-2">&amp;</span><span class="self">self</span>.circuit.fixed_assignments)<span class="question-mark">?</span>;
 
-                <span class="kw">for </span>(column, offset, value) <span class="kw">in </span>advice_assignments.iter() {
-                    region.assign_advice(|| <span class="string">&quot;&quot;</span>, <span class="kw-2">*</span>column, <span class="kw-2">*</span>offset, || <span class="kw-2">*</span>value)<span class="question-mark">?</span>;
-                }
-
-                <span class="kw">if </span>height &gt; <span class="number">0 </span>{
-                    <span class="self">self</span>.default_fixed(<span class="kw-2">&amp;mut </span>region, height);
+                <span class="kw">if let </span><span class="prelude-val">Some</span>(witness) = <span class="kw-2">&amp;</span>witness {
+                    <span class="self">self</span>.assign_advice(<span class="kw-2">&amp;mut </span>region, witness)<span class="question-mark">?</span>;
                 }
 
                 <span class="prelude-val">Ok</span>(())
             },
         );
-    }
 
-    <span class="kw">fn </span>synthesize_fixed(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;Assignment&lt;F, Fixed&gt;&gt; {
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(fg) = <span class="kw-2">&amp;</span><span class="self">self</span>.circuit.fixed_gen {
-            <span class="kw">let </span><span class="kw-2">mut </span>ctx = FixedGenContextHalo2::&lt;F&gt; {
-                assigments: Default::default(),
-
-                max_offset: <span class="number">0</span>,
-            };
-
-            fg(<span class="kw-2">&amp;mut </span>ctx);
-
-            ctx.assigments
-        } <span class="kw">else </span>{
-            <span class="macro">vec!</span>[]
+        <span class="kw">for </span>(index, (column, rotation)) <span class="kw">in </span><span class="self">self</span>.circuit.exposed.iter().enumerate() {
+            <span class="kw">let </span>halo2_column =
+                Column::&lt;Any&gt;::from(<span class="kw-2">*</span><span class="self">self</span>.advice_columns.get(<span class="kw-2">&amp;</span>column.uuid()).unwrap());
+            <span class="kw">let </span>cell = new_cell(
+                halo2_column,
+                <span class="comment">// For single row cell manager, forward signal rotation is always zero.
+                // For max width cell manager, rotation can be non-zero.
+                // Offset is 0 + rotation for the first step instance.
+                </span><span class="kw-2">*</span>rotation <span class="kw">as </span>usize,
+            );
+            <span class="kw">let _ </span>= layouter.constrain_instance(cell, <span class="self">self</span>.instance_column.unwrap(), index);
         }
     }
 
-    <span class="kw">fn </span>synthesize_advice(<span class="kw-2">&amp;</span><span class="self">self</span>, args: TraceArgs) -&gt; (Vec&lt;Assignment&lt;F, Advice&gt;&gt;, usize) {
-        <span class="kw">if </span><span class="self">self</span>.debug {
-            <span class="macro">println!</span>(<span class="string">&quot;starting advise generation&quot;</span>);
+    <span class="kw">fn </span>assign_advice(<span class="kw-2">&amp;</span><span class="self">self</span>, region: <span class="kw-2">&amp;mut </span>Region&lt;F&gt;, witness: <span class="kw-2">&amp;</span>Assignments&lt;F&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;(), Error&gt; {
+        <span class="kw">for </span>(column, assignments) <span class="kw">in </span>witness {
+            <span class="kw">let </span>column = <span class="self">self</span>.convert_advice_column(column);
+
+            <span class="kw">for </span>(offset, value) <span class="kw">in </span>assignments.iter().enumerate() {
+                region.assign_advice(|| <span class="string">&quot;&quot;</span>, column, offset, || Value::known(<span class="kw-2">*</span>value))<span class="question-mark">?</span>;
+            }
         }
 
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(trace) = <span class="kw-2">&amp;</span><span class="self">self</span>.circuit.trace {
-            <span class="kw">let </span><span class="kw-2">mut </span>ctx = TraceContextHalo2::&lt;F, StepArgs&gt; {
-                assigments: Default::default(),
-                advice_columns: <span class="self">self</span>.advice_columns.clone(),
-                placement: <span class="self">self</span>.circuit.placement.clone(),
-                selector: <span class="self">self</span>.circuit.selector.clone(),
-                step_types: <span class="self">self</span>.circuit.step_types.clone(),
-                offset: <span class="number">0</span>,
-                cur_step: <span class="prelude-val">None</span>,
-                max_offset: <span class="number">0</span>,
-                height: <span class="number">0</span>,
-            };
+        <span class="prelude-val">Ok</span>(())
+    }
 
-            trace(<span class="kw-2">&amp;mut </span>ctx, args);
+    <span class="kw">fn </span>assign_fixed(<span class="kw-2">&amp;</span><span class="self">self</span>, region: <span class="kw-2">&amp;mut </span>Region&lt;F&gt;, fixed: <span class="kw-2">&amp;</span>Assignments&lt;F&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;(), Error&gt; {
+        <span class="kw">for </span>(column, values) <span class="kw">in </span>fixed {
+            <span class="kw">let </span>column = <span class="self">self</span>.convert_fixed_column(column);
 
-            <span class="kw">let </span>height = <span class="kw">if </span>ctx.height &gt; <span class="number">0 </span>{
-                ctx.height
-            } <span class="kw">else </span>{
-                ctx.max_offset + <span class="number">1
-            </span>};
-
-            (ctx.assigments, height)
-        } <span class="kw">else </span>{
-            (<span class="macro">vec!</span>[], <span class="number">0</span>)
+            <span class="kw">for </span>(offset, value) <span class="kw">in </span>values.iter().enumerate() {
+                region.assign_fixed(|| <span class="string">&quot;&quot;</span>, column, offset, || Value::known(<span class="kw-2">*</span>value))<span class="question-mark">?</span>;
+            }
         }
+
+        <span class="prelude-val">Ok</span>(())
     }
 
     <span class="kw">fn </span>annotate_circuit(<span class="kw-2">&amp;</span><span class="self">self</span>, region: <span class="kw-2">&amp;mut </span>Region&lt;F&gt;) {
@@ -713,46 +679,6 @@
                     region.name_column(|| column.annotation.clone(), <span class="kw-2">*</span>halo2_column);
                 }
             }
-        }
-    }
-
-    <span class="kw">fn </span>default_fixed(<span class="kw-2">&amp;</span><span class="self">self</span>, region: <span class="kw-2">&amp;mut </span>Region&lt;F&gt;, height: usize) {
-        <span class="kw">let </span>q_enable = <span class="self">self
-            </span>.fixed_columns
-            .get(<span class="kw-2">&amp;</span><span class="self">self</span>.circuit.q_enable.uuid())
-            .expect(<span class="string">&quot;q_enable column not found&quot;</span>);
-
-        <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..height {
-            region
-                .assign_fixed(|| <span class="string">&quot;q_enable=1&quot;</span>, <span class="kw-2">*</span>q_enable, i, || Value::known(F::one()))
-                .expect(<span class="string">&quot;assignment of q_enable fixed column failed&quot;</span>);
-        }
-
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(q_first) = <span class="self">self</span>.circuit.q_first.clone() {
-            <span class="kw">let </span>q_first = <span class="self">self
-                </span>.fixed_columns
-                .get(<span class="kw-2">&amp;</span>q_first.uuid())
-                .expect(<span class="string">&quot;q_enable column not found&quot;</span>);
-
-            region
-                .assign_fixed(|| <span class="string">&quot;q_first=1&quot;</span>, <span class="kw-2">*</span>q_first, <span class="number">0</span>, || Value::known(F::one()))
-                .expect(<span class="string">&quot;assignment of q_first fixed column failed&quot;</span>);
-        }
-
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(q_last) = <span class="self">self</span>.circuit.q_last.clone() {
-            <span class="kw">let </span>q_last = <span class="self">self
-                </span>.fixed_columns
-                .get(<span class="kw-2">&amp;</span>q_last.uuid())
-                .expect(<span class="string">&quot;q_enable column not found&quot;</span>);
-
-            region
-                .assign_fixed(
-                    || <span class="string">&quot;q_first=1&quot;</span>,
-                    <span class="kw-2">*</span>q_last,
-                    height - <span class="number">1</span>,
-                    || Value::known(F::one()),
-                )
-                .expect(<span class="string">&quot;assignment of q_last fixed column failed&quot;</span>);
         }
     }
 
@@ -808,175 +734,47 @@
             }
         }
     }
-}
 
-<span class="kw">type </span>Assignment&lt;F, CT&gt; = (Column&lt;CT&gt;, usize, Value&lt;F&gt;);
-
-<span class="kw">struct </span>TraceContextHalo2&lt;F: Field, StepArgs&gt; {
-    advice_columns: HashMap&lt;u32, Column&lt;Advice&gt;&gt;,
-    placement: Placement&lt;F, StepArgs&gt;,
-    selector: StepSelector&lt;F, StepArgs&gt;,
-    step_types: HashMap&lt;u32, Rc&lt;StepType&lt;F, StepArgs&gt;&gt;&gt;,
-
-    offset: usize,
-    cur_step: <span class="prelude-ty">Option</span>&lt;Rc&lt;StepType&lt;F, StepArgs&gt;&gt;&gt;,
-
-    assigments: Vec&lt;Assignment&lt;F, Advice&gt;&gt;,
-
-    max_offset: usize,
-    height: usize,
-}
-
-<span class="kw">impl</span>&lt;F: Field, StepArgs: Clone&gt; TraceContextHalo2&lt;F, StepArgs&gt; {
-    <span class="kw">fn </span>find_halo2_placement(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        step: <span class="kw-2">&amp;</span>StepType&lt;F, StepArgs&gt;,
-        query: Queriable&lt;F&gt;,
-    ) -&gt; (Column&lt;Advice&gt;, i32) {
-        <span class="kw">match </span>query {
-            Queriable::Internal(signal) =&gt; <span class="self">self</span>.find_halo2_placement_internal(step, signal),
-
-            Queriable::Forward(forward, next) =&gt; {
-                <span class="self">self</span>.find_halo2_placement_forward(step, forward, next)
-            }
-
-            Queriable::Halo2AdviceQuery(signal, rotation) =&gt; (signal.column, rotation),
-
-            <span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">&quot;invalid advice assignment on queriable {:?}&quot;</span>, query),
+    <span class="kw">fn </span>convert_advice_column(<span class="kw-2">&amp;</span><span class="self">self</span>, column: <span class="kw-2">&amp;</span>cColumn) -&gt; Column&lt;Advice&gt; {
+        <span class="kw">match </span>column.ctype {
+            cAdvice | Halo2Advice =&gt; <span class="kw-2">*</span><span class="self">self
+                </span>.advice_columns
+                .get(<span class="kw-2">&amp;</span>column.uuid())
+                .unwrap_or_else(|| <span class="macro">panic!</span>(<span class="string">&quot;column not found {}&quot;</span>, column.annotation)),
+            <span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">&quot;worng column type&quot;</span>),
         }
     }
 
-    <span class="kw">fn </span>find_halo2_placement_internal(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        step: <span class="kw-2">&amp;</span>StepType&lt;F, StepArgs&gt;,
-        signal: InternalSignal,
-    ) -&gt; (Column&lt;Advice&gt;, i32) {
-        <span class="kw">let </span>placement = <span class="self">self</span>.placement.find_internal_signal_placement(step, <span class="kw-2">&amp;</span>signal);
-
-        <span class="kw">let </span>column = <span class="self">self
-            </span>.advice_columns
-            .get(<span class="kw-2">&amp;</span>placement.column.uuid())
-            .unwrap_or_else(|| <span class="macro">panic!</span>(<span class="string">&quot;column not found for internal signal {:?}&quot;</span>, signal));
-
-        (<span class="kw-2">*</span>column, placement.rotation)
-    }
-
-    <span class="kw">fn </span>find_halo2_placement_forward(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        step: <span class="kw-2">&amp;</span>StepType&lt;F, StepArgs&gt;,
-        forward: ForwardSignal,
-        next: bool,
-    ) -&gt; (Column&lt;Advice&gt;, i32) {
-        <span class="kw">let </span>placement = <span class="self">self</span>.placement.get_forward_placement(<span class="kw-2">&amp;</span>forward);
-
-        <span class="kw">let </span>super_rotation = placement.rotation
-            + <span class="kw">if </span>next {
-                <span class="self">self</span>.placement.step_height(step) <span class="kw">as </span>i32
-            } <span class="kw">else </span>{
-                <span class="number">0
-            </span>};
-
-        <span class="kw">let </span>column = <span class="self">self
-            </span>.advice_columns
-            .get(<span class="kw-2">&amp;</span>placement.column.uuid())
-            .unwrap_or_else(|| <span class="macro">panic!</span>(<span class="string">&quot;column not found for forward signal {:?}&quot;</span>, forward));
-
-        (<span class="kw-2">*</span>column, super_rotation)
-    }
-}
-
-<span class="kw">impl</span>&lt;F: Field, StepArgs: Clone&gt; TraceContext&lt;StepArgs&gt; <span class="kw">for </span>TraceContextHalo2&lt;F, StepArgs&gt; {
-    <span class="kw">fn </span>add(<span class="kw-2">&amp;mut </span><span class="self">self</span>, step: <span class="kw-2">&amp;</span>StepTypeHandler, args: StepArgs) {
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(cur_step) = <span class="kw-2">&amp;</span><span class="self">self</span>.cur_step {
-            <span class="self">self</span>.offset += <span class="self">self</span>.placement.step_height(cur_step) <span class="kw">as </span>usize;
-        } <span class="kw">else </span>{
-            <span class="self">self</span>.offset = <span class="number">0</span>;
-        }
-
-        <span class="kw">let </span>cur_step = Rc::clone(
-            <span class="self">self</span>.step_types
-                .get(<span class="kw-2">&amp;</span>step.uuid())
-                .expect(<span class="string">&quot;step type not found&quot;</span>),
-        );
-
-        <span class="self">self</span>.cur_step = <span class="prelude-val">Some</span>(Rc::clone(<span class="kw-2">&amp;</span>cur_step));
-
-        (<span class="kw-2">*</span>cur_step.wg)(<span class="self">self</span>, args);
-
-        <span class="comment">// activate selector
-
-        </span><span class="kw">let </span>selector_assignment = <span class="self">self
-            </span>.selector
-            .selector_assignment
-            .get(<span class="kw-2">&amp;</span>cur_step)
-            .expect(<span class="string">&quot;selector assignment for step not found&quot;</span>);
-
-        <span class="kw">for </span>(expr, value) <span class="kw">in </span>selector_assignment.iter() {
-            <span class="kw">match </span>expr {
-                PolyExpr::Query(column, rot, <span class="kw">_</span>) =&gt; {
-                    <span class="kw">let </span>column = <span class="self">self
-                        </span>.advice_columns
-                        .get(<span class="kw-2">&amp;</span>column.uuid())
-                        .expect(<span class="string">&quot;selector expression column not found&quot;</span>);
-
-                    <span class="self">self</span>.assigments.push((
-                        <span class="kw-2">*</span>column,
-                        <span class="self">self</span>.offset + <span class="kw-2">*</span>rot <span class="kw">as </span>usize,
-                        Value::known(<span class="kw-2">*</span>value),
-                    ))
-                }
-                <span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">&quot;wrong type of expresion is selector assignment&quot;</span>),
-            }
-        }
-    }
-
-    <span class="kw">fn </span>set_height(<span class="kw-2">&amp;mut </span><span class="self">self</span>, height: usize) {
-        <span class="self">self</span>.height = height;
-    }
-}
-
-<span class="kw">impl</span>&lt;F: Field, StepArgs: Clone&gt; WitnessGenContext&lt;F&gt; <span class="kw">for </span>TraceContextHalo2&lt;F, StepArgs&gt; {
-    <span class="kw">fn </span>assign(<span class="kw-2">&amp;mut </span><span class="self">self</span>, lhs: Queriable&lt;F&gt;, rhs: F) {
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(cur_step) = <span class="kw-2">&amp;</span><span class="self">self</span>.cur_step {
-            <span class="kw">let </span>(column, rotation) = <span class="self">self</span>.find_halo2_placement(cur_step, lhs);
-
-            <span class="kw">let </span>offset = (<span class="self">self</span>.offset <span class="kw">as </span>i32 + rotation) <span class="kw">as </span>usize;
-            <span class="self">self</span>.assigments.push((column, offset, Value::known(rhs)));
-
-            <span class="self">self</span>.max_offset = <span class="self">self</span>.max_offset.max(offset);
-        } <span class="kw">else </span>{
-            <span class="macro">panic!</span>(<span class="string">&quot;jarrl assigning outside a step&quot;</span>);
+    <span class="kw">fn </span>convert_fixed_column(<span class="kw-2">&amp;</span><span class="self">self</span>, column: <span class="kw-2">&amp;</span>cColumn) -&gt; Column&lt;Fixed&gt; {
+        <span class="kw">match </span>column.ctype {
+            cFixed | Halo2Fixed =&gt; <span class="kw-2">*</span><span class="self">self
+                </span>.fixed_columns
+                .get(<span class="kw-2">&amp;</span>column.uuid())
+                .unwrap_or_else(|| <span class="macro">panic!</span>(<span class="string">&quot;column not found {}&quot;</span>, column.annotation)),
+            <span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">&quot;worng column type&quot;</span>),
         }
     }
 }
 
-<span class="kw">struct </span>FixedGenContextHalo2&lt;F: Field&gt; {
-    assigments: Vec&lt;Assignment&lt;F, Fixed&gt;&gt;,
-
-    max_offset: usize,
+<span class="attribute">#[allow(dead_code)]
+</span><span class="comment">// From Plaf Halo2 backend.
+// _Cell is a helper struct used for constructing Halo2 Cell.
+</span><span class="kw">struct </span>_Cell {
+    region_index: RegionIndex,
+    row_offset: usize,
+    column: Column&lt;Any&gt;,
 }
-
-<span class="kw">impl</span>&lt;F: Field&gt; FixedGenContextHalo2&lt;F&gt; {
-    <span class="kw">fn </span>find_halo2_placement(query: Queriable&lt;F&gt;) -&gt; (Column&lt;Fixed&gt;, i32) {
-        <span class="kw">match </span>query {
-            Queriable::Halo2FixedQuery(signal, rotation) =&gt; (signal.column, rotation),
-            <span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">&quot;invalid fixed assignment on queriable {:?}&quot;</span>, query),
-        }
-    }
-}
-
-<span class="kw">impl</span>&lt;F: Field&gt; FixedGenContext&lt;F&gt; <span class="kw">for </span>FixedGenContextHalo2&lt;F&gt; {
-    <span class="kw">fn </span>assign(<span class="kw-2">&amp;mut </span><span class="self">self</span>, offset: usize, lhs: Queriable&lt;F&gt;, rhs: F) {
-        <span class="kw">let </span>(column, rotation) = <span class="self">Self</span>::find_halo2_placement(lhs);
-
-        <span class="kw">if </span>rotation != <span class="number">0 </span>{
-            <span class="macro">panic!</span>(<span class="string">&quot;cannot assign fixed value with rotation&quot;</span>);
-        }
-
-        <span class="self">self</span>.assigments.push((column, offset, Value::known(rhs)));
-
-        <span class="self">self</span>.max_offset = <span class="self">self</span>.max_offset.max(offset);
-    }
+<span class="comment">// From Plaf Halo2 backend.
+</span><span class="kw">fn </span>new_cell(column: Column&lt;Any&gt;, offset: usize) -&gt; Cell {
+    <span class="kw">let </span>cell = _Cell {
+        region_index: RegionIndex::from(<span class="number">0</span>),
+        row_offset: offset,
+        column,
+    };
+    <span class="comment">// NOTE: We use unsafe here to construct a Cell, which doesn&#39;t have a public constructor.  This
+    // helps us set the copy constraints easily (without having to store all assigned cells
+    // previously)
+    </span><span class="kw">unsafe </span>{ std::mem::transmute::&lt;_Cell, Cell&gt;(cell) }
 }
 
 <span class="kw">pub fn </span>to_halo2_advice&lt;F: Field&gt;(
@@ -988,6 +786,132 @@
         <span class="number">1 </span>=&gt; meta.advice_column_in(SecondPhase),
         <span class="number">2 </span>=&gt; meta.advice_column_in(ThirdPhase),
         <span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">&quot;jarll wrong phase&quot;</span>),
+    }
+}
+
+<span class="attribute">#[derive(Clone, Default)]
+</span><span class="kw">pub struct </span>ChiquitoHalo2Circuit&lt;F: Field + From&lt;u64&gt;&gt; {
+    compiled: ChiquitoHalo2&lt;F&gt;,
+    witness: <span class="prelude-ty">Option</span>&lt;Assignments&lt;F&gt;&gt;,
+}
+
+<span class="kw">impl</span>&lt;F: Field + From&lt;u64&gt;&gt; ChiquitoHalo2Circuit&lt;F&gt; {
+    <span class="kw">pub fn </span>new(compiled: ChiquitoHalo2&lt;F&gt;, witness: <span class="prelude-ty">Option</span>&lt;Assignments&lt;F&gt;&gt;) -&gt; <span class="self">Self </span>{
+        <span class="self">Self </span>{ compiled, witness }
+    }
+}
+
+<span class="kw">impl</span>&lt;F: Field + From&lt;u64&gt; + Hash&gt; h2Circuit&lt;F&gt; <span class="kw">for </span>ChiquitoHalo2Circuit&lt;F&gt; {
+    <span class="kw">type </span>Config = ChiquitoHalo2&lt;F&gt;;
+
+    <span class="kw">type </span>FloorPlanner = SimpleFloorPlanner;
+
+    <span class="kw">type </span>Params = ChiquitoHalo2&lt;F&gt;;
+
+    <span class="kw">fn </span>without_witnesses(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
+        <span class="self">Self</span>::default()
+    }
+
+    <span class="kw">fn </span>params(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="self">Self</span>::Params {
+        <span class="self">self</span>.compiled.clone()
+    }
+
+    <span class="kw">fn </span>configure_with_params(
+        meta: <span class="kw-2">&amp;mut </span>ConstraintSystem&lt;F&gt;,
+        <span class="kw-2">mut </span>compiled: <span class="self">Self</span>::Params,
+    ) -&gt; <span class="self">Self</span>::Config {
+        compiled.configure(meta);
+
+        compiled
+    }
+
+    <span class="kw">fn </span>synthesize(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        compiled: <span class="self">Self</span>::Config,
+        <span class="kw-2">mut </span>layouter: <span class="kw">impl </span>Layouter&lt;F&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), Error&gt; {
+        compiled.synthesize(<span class="kw-2">&amp;mut </span>layouter, <span class="self">self</span>.witness.as_ref());
+
+        <span class="prelude-val">Ok</span>(())
+    }
+
+    <span class="kw">fn </span>configure(<span class="kw">_</span>: <span class="kw-2">&amp;mut </span>ConstraintSystem&lt;F&gt;) -&gt; <span class="self">Self</span>::Config {
+        <span class="macro">unreachable!</span>()
+    }
+}
+
+<span class="attribute">#[derive(Debug, Default)]
+</span><span class="kw">pub struct </span>ChiquitoHalo2SuperCircuit&lt;F: Field + From&lt;u64&gt;&gt; {
+    sub_circuits: Vec&lt;ChiquitoHalo2&lt;F&gt;&gt;,
+    witness: SuperAssignments&lt;F&gt;,
+}
+
+<span class="kw">impl</span>&lt;F: Field + From&lt;u64&gt;&gt; ChiquitoHalo2SuperCircuit&lt;F&gt; {
+    <span class="kw">pub fn </span>new(sub_circuits: Vec&lt;ChiquitoHalo2&lt;F&gt;&gt;, witness: SuperAssignments&lt;F&gt;) -&gt; <span class="self">Self </span>{
+        <span class="self">Self </span>{
+            sub_circuits,
+            witness,
+        }
+    }
+}
+
+<span class="kw">impl</span>&lt;F: Field + From&lt;u64&gt; + Hash&gt; h2Circuit&lt;F&gt; <span class="kw">for </span>ChiquitoHalo2SuperCircuit&lt;F&gt; {
+    <span class="kw">type </span>Config = Vec&lt;ChiquitoHalo2&lt;F&gt;&gt;;
+
+    <span class="kw">type </span>FloorPlanner = SimpleFloorPlanner;
+
+    <span class="kw">type </span>Params = Vec&lt;ChiquitoHalo2&lt;F&gt;&gt;;
+
+    <span class="kw">fn </span>without_witnesses(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
+        <span class="self">Self</span>::default()
+    }
+
+    <span class="kw">fn </span>params(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="self">Self</span>::Params {
+        <span class="self">self</span>.sub_circuits.clone()
+    }
+
+    <span class="kw">fn </span>configure_with_params(
+        meta: <span class="kw-2">&amp;mut </span>ConstraintSystem&lt;F&gt;,
+        <span class="kw-2">mut </span>sub_circuits: <span class="self">Self</span>::Params,
+    ) -&gt; <span class="self">Self</span>::Config {
+        sub_circuits
+            .iter_mut()
+            .for_each(|c| c.configure_columns_sub_circuit(meta));
+
+        <span class="kw">let </span>advice_columns: HashMap&lt;UUID, Column&lt;Advice&gt;&gt; =
+            sub_circuits.iter().fold(HashMap::default(), |<span class="kw-2">mut </span>acc, s| {
+                acc.extend(s.advice_columns.clone());
+                acc
+            });
+        <span class="kw">let </span>fixed_columns: HashMap&lt;UUID, Column&lt;Fixed&gt;&gt; =
+            sub_circuits.iter().fold(HashMap::default(), |<span class="kw-2">mut </span>acc, s| {
+                acc.extend(s.fixed_columns.clone());
+                acc
+            });
+
+        sub_circuits.iter_mut().for_each(|sub_circuit| {
+            sub_circuit.advice_columns = advice_columns.clone();
+            sub_circuit.fixed_columns = fixed_columns.clone();
+            sub_circuit.configure_sub_circuit(meta)
+        });
+
+        sub_circuits
+    }
+
+    <span class="kw">fn </span>synthesize(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        sub_circuits: <span class="self">Self</span>::Config,
+        <span class="kw-2">mut </span>layouter: <span class="kw">impl </span>Layouter&lt;F&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), Error&gt; {
+        <span class="kw">for </span>sub_circuit <span class="kw">in </span>sub_circuits {
+            sub_circuit.synthesize(<span class="kw-2">&amp;mut </span>layouter, <span class="self">self</span>.witness.get(<span class="kw-2">&amp;</span>sub_circuit.ir_id))
+        }
+
+        <span class="prelude-val">Ok</span>(())
+    }
+
+    <span class="kw">fn </span>configure(<span class="kw">_</span>: <span class="kw-2">&amp;mut </span>ConstraintSystem&lt;F&gt;) -&gt; <span class="self">Self</span>::Config {
+        <span class="macro">unreachable!</span>()
     }
 }
 </code></pre></div>

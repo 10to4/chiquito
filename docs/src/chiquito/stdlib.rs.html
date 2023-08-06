@@ -43,12 +43,23 @@
 <span id="43">43</span>
 <span id="44">44</span>
 <span id="45">45</span>
-</pre><pre class="rust"><code><span class="kw">use </span>halo2_proofs::{arithmetic::Field, halo2curves::FieldExt};
+<span id="46">46</span>
+<span id="47">47</span>
+<span id="48">48</span>
+<span id="49">49</span>
+<span id="50">50</span>
+<span id="51">51</span>
+</pre><pre class="rust"><code><span class="kw">use </span>std::hash::Hash;
+
+<span class="kw">use </span>halo2_proofs::arithmetic::Field;
 
 <span class="kw">use crate</span>::{
     ast::{query::Queriable, ToExpr},
-    compiler::WitnessGenContext,
-    dsl::{cb::Constraint, StepTypeContext},
+    dsl::{
+        cb::{Constraint, Typing},
+        StepTypeContext,
+    },
+    wit_gen::StepInstance,
 };
 
 <span class="kw">pub struct </span>IsZero&lt;F&gt; {
@@ -56,9 +67,9 @@
     is_zero_constraint: Constraint&lt;F&gt;,
 }
 
-<span class="kw">impl</span>&lt;F: FieldExt&gt; IsZero&lt;F&gt; {
-    <span class="kw">pub fn </span>setup&lt;V: Into&lt;Constraint&lt;F&gt;&gt;, StepArgs&gt;(
-        ctx: <span class="kw-2">&amp;mut </span>StepTypeContext&lt;F, StepArgs&gt;,
+<span class="kw">impl</span>&lt;F: Field + From&lt;u64&gt;&gt; IsZero&lt;F&gt; {
+    <span class="kw">pub fn </span>setup&lt;V: Into&lt;Constraint&lt;F&gt;&gt;&gt;(
+        ctx: <span class="kw-2">&amp;mut </span>StepTypeContext&lt;F&gt;,
         value: V,
         value_inv: Queriable&lt;F&gt;,
     ) -&gt; IsZero&lt;F&gt; {
@@ -70,6 +81,7 @@
         <span class="kw">let </span>is_zero_constraint = Constraint {
             expr: is_zero_expression,
             annotation: <span class="macro">format!</span>(<span class="string">&quot;is_zero({:?})&quot;</span>, value),
+            typing: Typing::Boolean,
         };
 
         IsZero {
@@ -83,9 +95,9 @@
     }
 }
 
-<span class="kw">impl</span>&lt;F: Field&gt; IsZero&lt;F&gt; {
-    <span class="kw">pub fn </span>wg(<span class="kw-2">&amp;</span><span class="self">self</span>, ctx: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>WitnessGenContext&lt;F&gt;, value: F) {
-        ctx.assign(<span class="self">self</span>.value_inv, value.invert().unwrap_or(F::zero()));
+<span class="kw">impl</span>&lt;F: Field + Eq + Hash&gt; IsZero&lt;F&gt; {
+    <span class="kw">pub fn </span>wg&lt;WGC&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, ctx: <span class="kw-2">&amp;mut </span>StepInstance&lt;F&gt;, value: F) {
+        ctx.assign(<span class="self">self</span>.value_inv, value.invert().unwrap_or(F::ZERO));
     }
 }
 </code></pre></div>
