@@ -125,6 +125,70 @@ pub fn split_to_4bits_values<F: PrimeField + Hash>(vec_values: &[u64]) -> Vec<Ve
         .collect()
 }
 
+#[derive(Default, Debug, Clone)]
+pub struct InputValuesParse {
+    pub rounds: u32,
+    pub h_vec_values: Vec<u64>,
+    pub m_vec_values: Vec<u64>,
+    pub v_vec_values: Vec<u64>,
+    pub iv_vec_values: Vec<u64>,
+    pub t_vec_values: Vec<u64>,
+    pub f: bool,
+}
+
+impl InputValuesParse {
+    pub fn new(s: String) -> Self {
+        let inputs: Vec<u8> = (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect();
+
+        assert_eq!(inputs.len(), 213);
+        let rounds: u32 = u32::from_be_bytes(inputs[0..4].try_into().unwrap());
+        let h_vec_values: Vec<u64> = (0..H_LEN)
+            .map(|i| u64::from_le_bytes(inputs[4 + i * 8..4 + (i + 1) * 8].try_into().unwrap()))
+            .collect();
+
+        let m_vec_values: Vec<u64> = (0..M_LEN)
+            .map(|i| {
+                u64::from_le_bytes(
+                    inputs[4 + (H_LEN + i) * 8..4 + (H_LEN + i + 1) * 8]
+                        .try_into()
+                        .unwrap(),
+                )
+            })
+            .collect();
+
+        let iv_vec_values = IV_VALUES.to_vec();
+
+        let mut v_vec_values = h_vec_values.clone();
+        v_vec_values.append(&mut iv_vec_values.clone());
+
+        let t_vec_values: Vec<u64> = (0..2)
+            .map(|i| {
+                u64::from_le_bytes(
+                    inputs[4 + (H_LEN + M_LEN + i) * 8..4 + (H_LEN + M_LEN + i + 1) * 8]
+                        .try_into()
+                        .unwrap(),
+                )
+            })
+            .collect();
+
+        let f = inputs[4 + (H_LEN + M_LEN + 2) * 8];
+        assert_eq!(f * (1 - f), 0);
+
+        Self {
+            h_vec_values,
+            m_vec_values,
+            v_vec_values,
+            iv_vec_values,
+            t_vec_values,
+            f: f != 0,
+            rounds,
+        }
+    }
+}
+
 fn blake2f_iv_table<F: PrimeField + Hash>(
     ctx: &mut CircuitContext<F, ()>,
     _: usize,
@@ -187,6 +251,7 @@ struct CircuitParams {
     pub iv_table: LookupTable,
     pub bits_table: LookupTable,
     pub xor_4bits_table: LookupTable,
+    pub num: usize,
 }
 
 impl CircuitParams {
@@ -279,15 +344,6 @@ struct FinalInput<F> {
     h_split_bit_vec: Vec<Vec<F>>,
     v_xor_split_bit_vec: Vec<Vec<F>>,
     final_split_bit_vec: Vec<Vec<F>>,
-}
-
-struct InputValues {
-    pub round: u32,          // 32bit
-    pub h_vec: [u64; H_LEN], // 8 * 64bits
-    pub m_vec: [u64; M_LEN], // 16 * 64bits
-    pub t0: u64,             // 64bits
-    pub t1: u64,             // 64bits
-    pub f: bool,             // 8bits
 }
 
 struct GStepParams<F> {
@@ -529,7 +585,7 @@ fn g_setup<F: PrimeField + Hash>(
 }
 
 fn blake2f_circuit<F: PrimeField + Hash>(
-    ctx: &mut CircuitContext<F, InputValues>,
+    ctx: &mut CircuitContext<F, Vec<InputValuesParse>>,
     params: CircuitParams,
 ) {
     let v_vec: Vec<Queriable<F>> = (0..V_LEN)
@@ -1164,210 +1220,212 @@ fn blake2f_circuit<F: PrimeField + Hash>(
 
     ctx.pragma_first_step(&blake2f_pre_step);
     ctx.pragma_last_step(&blake2f_final_step);
-    ctx.pragma_num_steps(MIXING_ROUNDS as usize + 2);
+    ctx.pragma_num_steps((MIXING_ROUNDS as usize + 2) * params.num); // todo
 
     ctx.trace(move |ctx, values| {
-        let h_vec_values = values.h_vec.to_vec();
-        let h_split_4bits_vec = split_to_4bits_values::<F>(&h_vec_values);
+        assert_eq!(values.len(), params.num);
 
-        let m_vec_values = values.m_vec.to_vec();
-        let m_split_4bits_vec = split_to_4bits_values::<F>(&m_vec_values);
+        for values in values.iter() {
+            let mut values = values.clone();
+            let h_split_4bits_vec = split_to_4bits_values::<F>(&values.h_vec_values);
+            let m_split_4bits_vec = split_to_4bits_values::<F>(&values.m_vec_values);
+            let iv_split_4bits_vec: Vec<Vec<F>> =
+                split_to_4bits_values::<F>(&values.iv_vec_values[4..7]);
+            let t_split_4bits_vec = split_to_4bits_values::<F>(&values.t_vec_values);
 
-        let mut iv_vec_values = IV_VALUES.to_vec();
-        let iv_split_4bits_vec: Vec<Vec<F>> = split_to_4bits_values::<F>(&iv_vec_values[4..7]);
+            let final_values = vec![
+                values.v_vec_values[12] ^ values.t_vec_values[0],
+                values.v_vec_values[13] ^ values.t_vec_values[1],
+                values.v_vec_values[14] ^ 0xFFFFFFFFFFFFFFFF,
+            ];
+            let final_split_bits_vec = split_to_4bits_values::<F>(&final_values);
 
-        let mut v_vec_values = h_vec_values.clone();
-        v_vec_values.append(&mut iv_vec_values);
-
-        let t_split_4bits_vec = split_to_4bits_values::<F>(&[values.t0, values.t1]);
-
-        let final_values = vec![
-            v_vec_values[12] ^ values.t0,
-            v_vec_values[13] ^ values.t1,
-            v_vec_values[14] ^ 0xFFFFFFFFFFFFFFFF,
-        ];
-        let final_split_bits_vec = split_to_4bits_values::<F>(&final_values);
-
-        let pre_inputs = PreInput {
-            round: F::ZERO,
-            t0: F::from(values.t0),
-            t1: F::from(values.t1),
-            f: F::from(if values.f { 1 } else { 0 }),
-            h_vec: h_vec_values.iter().map(|&v| F::from(v)).collect(),
-            m_vec: m_vec_values.iter().map(|&v| F::from(v)).collect(),
-            v_vec: v_vec_values.iter().map(|&v| F::from(v)).collect(),
-            h_split_4bits_vec,
-            m_split_4bits_vec,
-            t_split_4bits_vec,
-            iv_split_4bits_vec,
-            final_split_bits_vec,
-        };
-        ctx.add(&blake2f_pre_step, pre_inputs);
-
-        v_vec_values[12] = final_values[0];
-        v_vec_values[13] = final_values[1];
-        if values.f {
-            v_vec_values[14] = final_values[2];
-        }
-
-        for r in 0..values.round {
-            let s = SIGMA_VALUES[(r as usize) % 10];
-
-            let mut v_mid1_vec_values = v_vec_values.clone();
-            let mut v_mid2_vec_values = v_vec_values.clone();
-            let mut v_mid_va_bit_vec = Vec::new();
-            let mut v_mid_vb_bit_vec = Vec::new();
-            let mut v_mid_vc_bit_vec = Vec::new();
-            let mut v_mid_vd_bit_vec = Vec::new();
-            let mut v_xor_d_bit_vec = Vec::new();
-            let mut v_xor_b_bit_vec = Vec::new();
-            let mut b_bit_vec = Vec::new();
-            let mut b_3bits_vec = Vec::new();
-
-            g_wg(
-                (&mut v_mid1_vec_values, &mut v_mid2_vec_values),
-                (0, 4, 8, 12),
-                (m_vec_values[s[0]], m_vec_values[s[1]]),
-                (&mut v_mid_va_bit_vec, &mut v_mid_vb_bit_vec),
-                (&mut v_mid_vc_bit_vec, &mut v_mid_vd_bit_vec),
-                (&mut v_xor_d_bit_vec, &mut v_xor_b_bit_vec),
-                (&mut b_bit_vec, &mut b_3bits_vec),
-            );
-            g_wg(
-                (&mut v_mid1_vec_values, &mut v_mid2_vec_values),
-                (1, 5, 9, 13),
-                (m_vec_values[s[2]], m_vec_values[s[3]]),
-                (&mut v_mid_va_bit_vec, &mut v_mid_vb_bit_vec),
-                (&mut v_mid_vc_bit_vec, &mut v_mid_vd_bit_vec),
-                (&mut v_xor_d_bit_vec, &mut v_xor_b_bit_vec),
-                (&mut b_bit_vec, &mut b_3bits_vec),
-            );
-            g_wg(
-                (&mut v_mid1_vec_values, &mut v_mid2_vec_values),
-                (2, 6, 10, 14),
-                (m_vec_values[s[4]], m_vec_values[s[5]]),
-                (&mut v_mid_va_bit_vec, &mut v_mid_vb_bit_vec),
-                (&mut v_mid_vc_bit_vec, &mut v_mid_vd_bit_vec),
-                (&mut v_xor_d_bit_vec, &mut v_xor_b_bit_vec),
-                (&mut b_bit_vec, &mut b_3bits_vec),
-            );
-            g_wg(
-                (&mut v_mid1_vec_values, &mut v_mid2_vec_values),
-                (3, 7, 11, 15),
-                (m_vec_values[s[6]], m_vec_values[s[7]]),
-                (&mut v_mid_va_bit_vec, &mut v_mid_vb_bit_vec),
-                (&mut v_mid_vc_bit_vec, &mut v_mid_vd_bit_vec),
-                (&mut v_xor_d_bit_vec, &mut v_xor_b_bit_vec),
-                (&mut b_bit_vec, &mut b_3bits_vec),
-            );
-
-            let mut v_mid3_vec_values = v_mid2_vec_values.clone();
-            let mut v_mid4_vec_values = v_mid2_vec_values.clone();
-            g_wg(
-                (&mut v_mid3_vec_values, &mut v_mid4_vec_values),
-                (0, 5, 10, 15),
-                (m_vec_values[s[8]], m_vec_values[s[9]]),
-                (&mut v_mid_va_bit_vec, &mut v_mid_vb_bit_vec),
-                (&mut v_mid_vc_bit_vec, &mut v_mid_vd_bit_vec),
-                (&mut v_xor_d_bit_vec, &mut v_xor_b_bit_vec),
-                (&mut b_bit_vec, &mut b_3bits_vec),
-            );
-            g_wg(
-                (&mut v_mid3_vec_values, &mut v_mid4_vec_values),
-                (1, 6, 11, 12),
-                (m_vec_values[s[10]], m_vec_values[s[11]]),
-                (&mut v_mid_va_bit_vec, &mut v_mid_vb_bit_vec),
-                (&mut v_mid_vc_bit_vec, &mut v_mid_vd_bit_vec),
-                (&mut v_xor_d_bit_vec, &mut v_xor_b_bit_vec),
-                (&mut b_bit_vec, &mut b_3bits_vec),
-            );
-            g_wg(
-                (&mut v_mid3_vec_values, &mut v_mid4_vec_values),
-                (2, 7, 8, 13),
-                (m_vec_values[s[12]], m_vec_values[s[13]]),
-                (&mut v_mid_va_bit_vec, &mut v_mid_vb_bit_vec),
-                (&mut v_mid_vc_bit_vec, &mut v_mid_vd_bit_vec),
-                (&mut v_xor_d_bit_vec, &mut v_xor_b_bit_vec),
-                (&mut b_bit_vec, &mut b_3bits_vec),
-            );
-            g_wg(
-                (&mut v_mid3_vec_values, &mut v_mid4_vec_values),
-                (3, 4, 9, 14),
-                (m_vec_values[s[14]], m_vec_values[s[15]]),
-                (&mut v_mid_va_bit_vec, &mut v_mid_vb_bit_vec),
-                (&mut v_mid_vc_bit_vec, &mut v_mid_vd_bit_vec),
-                (&mut v_xor_d_bit_vec, &mut v_xor_b_bit_vec),
-                (&mut b_bit_vec, &mut b_3bits_vec),
-            );
-
-            let ginputs = GInput {
-                round: F::from(r as u64),
-                v_vec: v_vec_values.iter().map(|&v| F::from(v)).collect(),
-                h_vec: h_vec_values.iter().map(|&v| F::from(v)).collect(),
-                m_vec: m_vec_values.iter().map(|&v| F::from(v)).collect(),
-                v_mid1_vec: v_mid1_vec_values.iter().map(|&v| F::from(v)).collect(),
-                v_mid2_vec: v_mid2_vec_values.iter().map(|&v| F::from(v)).collect(),
-                v_mid3_vec: v_mid3_vec_values.iter().map(|&v| F::from(v)).collect(),
-                v_mid4_vec: v_mid4_vec_values.iter().map(|&v| F::from(v)).collect(),
-                v_mid_va_bit_vec,
-                v_mid_vb_bit_vec,
-                v_mid_vc_bit_vec,
-                v_mid_vd_bit_vec,
-                v_xor_d_bit_vec,
-                v_xor_b_bit_vec,
-                b_bit_vec,
-                b_3bits_vec,
+            let pre_inputs = PreInput {
+                round: F::ZERO,
+                t0: F::from(values.t_vec_values[0]),
+                t1: F::from(values.t_vec_values[1]),
+                f: F::from(if values.f { 1 } else { 0 }),
+                h_vec: values.h_vec_values.iter().map(|&v| F::from(v)).collect(),
+                m_vec: values.m_vec_values.iter().map(|&v| F::from(v)).collect(),
+                v_vec: values.v_vec_values.iter().map(|&v| F::from(v)).collect(),
+                h_split_4bits_vec,
+                m_split_4bits_vec,
+                t_split_4bits_vec,
+                iv_split_4bits_vec,
+                final_split_bits_vec,
             };
-            ctx.add(&blake2f_g_setup_vec[r as usize], ginputs);
-            v_vec_values = v_mid4_vec_values.clone();
-        }
+            ctx.add(&blake2f_pre_step, pre_inputs);
 
-        let output_vec_values: Vec<u64> = h_vec_values
-            .iter()
-            .zip(
-                v_vec_values[0..8]
+            values.v_vec_values[12] = final_values[0];
+            values.v_vec_values[13] = final_values[1];
+            if values.f {
+                values.v_vec_values[14] = final_values[2];
+            }
+
+            for r in 0..values.rounds {
+                let s = SIGMA_VALUES[(r as usize) % 10];
+
+                let mut v_mid1_vec_values = values.v_vec_values.clone();
+                let mut v_mid2_vec_values = values.v_vec_values.clone();
+                let mut v_mid_va_bit_vec = Vec::new();
+                let mut v_mid_vb_bit_vec = Vec::new();
+                let mut v_mid_vc_bit_vec = Vec::new();
+                let mut v_mid_vd_bit_vec = Vec::new();
+                let mut v_xor_d_bit_vec = Vec::new();
+                let mut v_xor_b_bit_vec = Vec::new();
+                let mut b_bit_vec = Vec::new();
+                let mut b_3bits_vec = Vec::new();
+
+                g_wg(
+                    (&mut v_mid1_vec_values, &mut v_mid2_vec_values),
+                    (0, 4, 8, 12),
+                    (values.m_vec_values[s[0]], values.m_vec_values[s[1]]),
+                    (&mut v_mid_va_bit_vec, &mut v_mid_vb_bit_vec),
+                    (&mut v_mid_vc_bit_vec, &mut v_mid_vd_bit_vec),
+                    (&mut v_xor_d_bit_vec, &mut v_xor_b_bit_vec),
+                    (&mut b_bit_vec, &mut b_3bits_vec),
+                );
+                g_wg(
+                    (&mut v_mid1_vec_values, &mut v_mid2_vec_values),
+                    (1, 5, 9, 13),
+                    (values.m_vec_values[s[2]], values.m_vec_values[s[3]]),
+                    (&mut v_mid_va_bit_vec, &mut v_mid_vb_bit_vec),
+                    (&mut v_mid_vc_bit_vec, &mut v_mid_vd_bit_vec),
+                    (&mut v_xor_d_bit_vec, &mut v_xor_b_bit_vec),
+                    (&mut b_bit_vec, &mut b_3bits_vec),
+                );
+                g_wg(
+                    (&mut v_mid1_vec_values, &mut v_mid2_vec_values),
+                    (2, 6, 10, 14),
+                    (values.m_vec_values[s[4]], values.m_vec_values[s[5]]),
+                    (&mut v_mid_va_bit_vec, &mut v_mid_vb_bit_vec),
+                    (&mut v_mid_vc_bit_vec, &mut v_mid_vd_bit_vec),
+                    (&mut v_xor_d_bit_vec, &mut v_xor_b_bit_vec),
+                    (&mut b_bit_vec, &mut b_3bits_vec),
+                );
+                g_wg(
+                    (&mut v_mid1_vec_values, &mut v_mid2_vec_values),
+                    (3, 7, 11, 15),
+                    (values.m_vec_values[s[6]], values.m_vec_values[s[7]]),
+                    (&mut v_mid_va_bit_vec, &mut v_mid_vb_bit_vec),
+                    (&mut v_mid_vc_bit_vec, &mut v_mid_vd_bit_vec),
+                    (&mut v_xor_d_bit_vec, &mut v_xor_b_bit_vec),
+                    (&mut b_bit_vec, &mut b_3bits_vec),
+                );
+
+                let mut v_mid3_vec_values = v_mid2_vec_values.clone();
+                let mut v_mid4_vec_values = v_mid2_vec_values.clone();
+                g_wg(
+                    (&mut v_mid3_vec_values, &mut v_mid4_vec_values),
+                    (0, 5, 10, 15),
+                    (values.m_vec_values[s[8]], values.m_vec_values[s[9]]),
+                    (&mut v_mid_va_bit_vec, &mut v_mid_vb_bit_vec),
+                    (&mut v_mid_vc_bit_vec, &mut v_mid_vd_bit_vec),
+                    (&mut v_xor_d_bit_vec, &mut v_xor_b_bit_vec),
+                    (&mut b_bit_vec, &mut b_3bits_vec),
+                );
+                g_wg(
+                    (&mut v_mid3_vec_values, &mut v_mid4_vec_values),
+                    (1, 6, 11, 12),
+                    (values.m_vec_values[s[10]], values.m_vec_values[s[11]]),
+                    (&mut v_mid_va_bit_vec, &mut v_mid_vb_bit_vec),
+                    (&mut v_mid_vc_bit_vec, &mut v_mid_vd_bit_vec),
+                    (&mut v_xor_d_bit_vec, &mut v_xor_b_bit_vec),
+                    (&mut b_bit_vec, &mut b_3bits_vec),
+                );
+                g_wg(
+                    (&mut v_mid3_vec_values, &mut v_mid4_vec_values),
+                    (2, 7, 8, 13),
+                    (values.m_vec_values[s[12]], values.m_vec_values[s[13]]),
+                    (&mut v_mid_va_bit_vec, &mut v_mid_vb_bit_vec),
+                    (&mut v_mid_vc_bit_vec, &mut v_mid_vd_bit_vec),
+                    (&mut v_xor_d_bit_vec, &mut v_xor_b_bit_vec),
+                    (&mut b_bit_vec, &mut b_3bits_vec),
+                );
+                g_wg(
+                    (&mut v_mid3_vec_values, &mut v_mid4_vec_values),
+                    (3, 4, 9, 14),
+                    (values.m_vec_values[s[14]], values.m_vec_values[s[15]]),
+                    (&mut v_mid_va_bit_vec, &mut v_mid_vb_bit_vec),
+                    (&mut v_mid_vc_bit_vec, &mut v_mid_vd_bit_vec),
+                    (&mut v_xor_d_bit_vec, &mut v_xor_b_bit_vec),
+                    (&mut b_bit_vec, &mut b_3bits_vec),
+                );
+
+                let ginputs = GInput {
+                    round: F::from(r as u64),
+                    v_vec: values.v_vec_values.iter().map(|&v| F::from(v)).collect(),
+                    h_vec: values.h_vec_values.iter().map(|&v| F::from(v)).collect(),
+                    m_vec: values.m_vec_values.iter().map(|&v| F::from(v)).collect(),
+                    v_mid1_vec: v_mid1_vec_values.iter().map(|&v| F::from(v)).collect(),
+                    v_mid2_vec: v_mid2_vec_values.iter().map(|&v| F::from(v)).collect(),
+                    v_mid3_vec: v_mid3_vec_values.iter().map(|&v| F::from(v)).collect(),
+                    v_mid4_vec: v_mid4_vec_values.iter().map(|&v| F::from(v)).collect(),
+                    v_mid_va_bit_vec,
+                    v_mid_vb_bit_vec,
+                    v_mid_vc_bit_vec,
+                    v_mid_vd_bit_vec,
+                    v_xor_d_bit_vec,
+                    v_xor_b_bit_vec,
+                    b_bit_vec,
+                    b_3bits_vec,
+                };
+                ctx.add(&blake2f_g_setup_vec[r as usize], ginputs);
+                values.v_vec_values = v_mid4_vec_values.clone();
+            }
+
+            let output_vec_values: Vec<u64> = values
+                .h_vec_values
+                .iter()
+                .zip(
+                    values.v_vec_values[0..8]
+                        .iter()
+                        .zip(values.v_vec_values[V_LEN / 2..V_LEN].iter()),
+                )
+                .map(|(h, (v1, v2))| h ^ v1 ^ v2)
+                .collect();
+
+            let final_inputs = FinalInput {
+                round: F::from(values.rounds as u64),
+                v_vec: values.v_vec_values.iter().map(|&v| F::from(v)).collect(),
+                h_vec: values.h_vec_values.iter().map(|&v| F::from(v)).collect(),
+                output_vec: output_vec_values.iter().map(|&v| F::from(v)).collect(),
+                v_split_bit_vec: values
+                    .v_vec_values
                     .iter()
-                    .zip(v_vec_values[V_LEN / 2..V_LEN].iter()),
-            )
-            .map(|(h, (v1, v2))| h ^ v1 ^ v2)
-            .collect();
-
-        let final_inputs = FinalInput {
-            round: F::from(values.round as u64),
-            v_vec: v_vec_values.iter().map(|&v| F::from(v)).collect(),
-            h_vec: h_vec_values.iter().map(|&v| F::from(v)).collect(),
-            output_vec: output_vec_values.iter().map(|&v| F::from(v)).collect(),
-            v_split_bit_vec: v_vec_values
-                .iter()
-                .map(|&v| split_value_4bits(v as u128, SPLIT_64BITS))
-                .collect(),
-            h_split_bit_vec: h_vec_values
-                .iter()
-                .map(|&v| split_value_4bits(v as u128, SPLIT_64BITS))
-                .collect(),
-            v_xor_split_bit_vec: v_vec_values[0..V_LEN / 2]
-                .iter()
-                .zip(v_vec_values[V_LEN / 2..V_LEN].iter())
-                .map(|(&v1, &v2)| split_xor_value(v1, v2))
-                .collect(),
-            final_split_bit_vec: output_vec_values
-                .iter()
-                .map(|&output| split_value_4bits(output as u128, SPLIT_64BITS))
-                .collect(),
-        };
-        ctx.add(&blake2f_final_step, final_inputs);
-        // ba80a53f981c4d0d, 6a2797b69f12f6e9, 4c212f14685ac4b7, 4b12bb6fdbffa2d1
-        // 7d87c5392aab792d, c252d5de4533cc95, 18d38aa8dbf1925a,b92386edd4009923
-        println!(
-            "output = {:?} \n         {:?}",
-            u64_to_string(&output_vec_values[0..4].try_into().unwrap()),
-            u64_to_string(&output_vec_values[4..8].try_into().unwrap())
-        );
+                    .map(|&v| split_value_4bits(v as u128, SPLIT_64BITS))
+                    .collect(),
+                h_split_bit_vec: values
+                    .h_vec_values
+                    .iter()
+                    .map(|&v| split_value_4bits(v as u128, SPLIT_64BITS))
+                    .collect(),
+                v_xor_split_bit_vec: values.v_vec_values[0..V_LEN / 2]
+                    .iter()
+                    .zip(values.v_vec_values[V_LEN / 2..V_LEN].iter())
+                    .map(|(&v1, &v2)| split_xor_value(v1, v2))
+                    .collect(),
+                final_split_bit_vec: output_vec_values
+                    .iter()
+                    .map(|&output| split_value_4bits(output as u128, SPLIT_64BITS))
+                    .collect(),
+            };
+            ctx.add(&blake2f_final_step, final_inputs);
+            // ba80a53f981c4d0d, 6a2797b69f12f6e9, 4c212f14685ac4b7, 4b12bb6fdbffa2d1
+            // 7d87c5392aab792d, c252d5de4533cc95, 18d38aa8dbf1925a,b92386edd4009923
+            println!(
+                "output = {:?} \n         {:?}",
+                u64_to_string(&output_vec_values[0..4].try_into().unwrap()),
+                u64_to_string(&output_vec_values[4..8].try_into().unwrap())
+            );
+        }
     })
 }
 
-fn blake2f_super_circuit<F: PrimeField + Hash>() -> SuperCircuit<F, InputValues> {
-    super_circuit::<F, InputValues, _>("blake2f", |ctx| {
+fn blake2f_super_circuit<F: PrimeField + Hash>(
+    num: usize,
+) -> SuperCircuit<F, Vec<InputValuesParse>> {
+    super_circuit::<F, Vec<InputValuesParse>, _>("blake2f", |ctx| {
         let single_config = config(SingleRowCellManager {}, SimpleStepSelectorBuilder {});
         let (_, iv_table) = ctx.sub_circuit(single_config.clone(), blake2f_iv_table, IV_LEN);
         let (_, bits_table) = ctx.sub_circuit(
@@ -1390,6 +1448,7 @@ fn blake2f_super_circuit<F: PrimeField + Hash>() -> SuperCircuit<F, InputValues>
             iv_table,
             bits_table,
             xor_4bits_table,
+            num,
         };
         let (blake2f, _) = ctx.sub_circuit(maxwidth_config, blake2f_circuit, params);
 
@@ -1400,91 +1459,19 @@ fn blake2f_super_circuit<F: PrimeField + Hash>() -> SuperCircuit<F, InputValues>
 }
 
 fn main() {
-    let super_circuit = blake2f_super_circuit::<Fr>();
+    let input1 = InputValuesParse::new(String::from("0000000c48c9bdf267e6096a3ba7ca8485ae67bb2bf894fe72f36e3cf1361d5f3af54fa5d182e6ad7f520e511f6c3e2b8c68059b6bbd41fbabd9831f79217e1319cde05b61626300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000001"));
+
+    let input2 = InputValuesParse::new(String::from("0000000c48c9bdf267e6096a3ba7ca8485ae67bb2bf894fe72f36e3cf1361d5f3af54fa5d182e6ad7f520e511f6c3e2b8c68059b6bbd41fbabd9831f79217e1319cde05b61626300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000"));
+
+    let muilt_inputs = vec![input1, input2];
+
+    let super_circuit = blake2f_super_circuit::<Fr>(muilt_inputs.len());
     let compiled = chiquitoSuperCircuit2Halo2(&super_circuit);
 
-    // h[0] = hex"48c9bdf267e6096a 3ba7ca8485ae67bb 2bf894fe72f36e3c f1361d5f3af54fa5";
-    // h[1] = hex"d182e6ad7f520e51 1f6c3e2b8c68059b 6bbd41fbabd9831f 79217e1319cde05b";
-    let h0 = string_to_u64([
-        "48c9bdf267e6096a",
-        "3ba7ca8485ae67bb",
-        "2bf894fe72f36e3c",
-        "f1361d5f3af54fa5",
-    ]);
-    let h1 = string_to_u64([
-        "d182e6ad7f520e51",
-        "1f6c3e2b8c68059b",
-        "6bbd41fbabd9831f",
-        "79217e1319cde05b",
-    ]);
-    // m[0] = hex"6162630000000000 0000000000000000 0000000000000000 0000000000000000";
-    // m[1] = hex"0000000000000000 0000000000000000 0000000000000000 0000000000000000";
-    // m[2] = hex"0000000000000000 0000000000000000 0000000000000000 0000000000000000";
-    // m[3] = hex"0000000000000000 0000000000000000 0000000000000000 0000000000000000";
-    let m0 = string_to_u64([
-        "6162630000000000",
-        "0000000000000000",
-        "0000000000000000",
-        "0000000000000000",
-    ]);
-    let m1 = string_to_u64([
-        "0000000000000000",
-        "0000000000000000",
-        "0000000000000000",
-        "0000000000000000",
-    ]);
-    let m2 = string_to_u64([
-        "0000000000000000",
-        "0000000000000000",
-        "0000000000000000",
-        "0000000000000000",
-    ]);
-    let m3 = string_to_u64([
-        "0000000000000000",
-        "0000000000000000",
-        "0000000000000000",
-        "0000000000000000",
-    ]);
-
-    let values = InputValues {
-        round: 12,
-
-        h_vec: [
-            h0[0], // 0x6a09e667f2bdc948,
-            h0[1], // 0xbb67ae8584caa73b,
-            h0[2], // 0x3c6ef372fe94f82b,
-            h0[3], // 0xa54ff53a5f1d36f1,
-            h1[0], // 0x510e527fade682d1,
-            h1[1], // 0x9b05688c2b3e6c1f,
-            h1[2], // 0x1f83d9abfb41bd6b,
-            h1[3], // 0x5be0cd19137e2179,
-        ], // 8 * 64bits
-
-        m_vec: [
-            m0[0], // 0x636261,
-            m0[1], // 0,
-            m0[2], // 0,
-            m0[3], // 0,
-            m1[0], // 0,
-            m1[1], // 0,
-            m1[2], // 0,
-            m1[3], // 0,
-            m2[0], // 0,
-            m2[1], // 0,
-            m2[2], // 0,
-            m2[3], // 0,
-            m3[0], // 0,
-            m3[1], // 0,
-            m3[2], // 0,
-            m3[3], // 0,
-        ], // 16 * 64bits
-        t0: 3,   // 64bits
-        t1: 0,   // 64bits
-        f: true, // 8bits
-    };
-
-    let circuit =
-        ChiquitoHalo2SuperCircuit::new(compiled, super_circuit.get_mapping().generate(values));
+    let circuit = ChiquitoHalo2SuperCircuit::new(
+        compiled,
+        super_circuit.get_mapping().generate(muilt_inputs),
+    );
 
     let prover = MockProver::run(9, &circuit, Vec::new()).unwrap();
     let result = prover.verify();
