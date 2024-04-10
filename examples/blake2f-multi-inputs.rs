@@ -227,7 +227,6 @@ fn blake2f_xor_4bits_table<F: PrimeField + Hash>(
     ctx.new_table(table().add(lookup_xor_row).add(lookup_xor_value))
 }
 
-
 #[derive(Clone)]
 struct CircuitParams {
     pub tparams: TableParams,
@@ -982,7 +981,7 @@ fn blake2f_circuit<F: PrimeField + Hash>(
                         ctx.transition(eq(h, h.next()));
                     }
                     // check m_vec m_vec.next()
-                    //todo
+                    // todo
                     for &m in m_vec.iter() {
                         ctx.transition(eq((round + 1 - final_round) * (m.next() - m), 0));
                     }
@@ -1219,7 +1218,7 @@ fn blake2f_circuit<F: PrimeField + Hash>(
     ctx.pragma_last_step(&blake2f_final_step);
 
     let num_steps = params.rounds.clone().iter().map(|&r| r as usize + 2).sum();
-    ctx.pragma_num_steps(num_steps); 
+    ctx.pragma_num_steps(num_steps);
 
     ctx.trace(move |ctx, values| {
         assert_eq!(values.len(), params.num);
@@ -1448,18 +1447,17 @@ fn blake2f_super_circuit<F: PrimeField + Hash>(
             SimpleStepSelectorBuilder {},
         );
 
-        let max_rounds  = rounds.iter()
-            .fold(12, |prev, &curr| prev.max(curr));
+        let max_rounds = rounds.iter().fold(12, |prev, &curr| prev.max(curr));
 
         let params = CircuitParams {
-            tparams: TableParams{
+            tparams: TableParams {
                 iv_table,
                 bits_table,
-                xor_4bits_table
+                xor_4bits_table,
             },
             num,
             rounds: rounds.to_vec(),
-            max_rounds
+            max_rounds,
         };
         let (blake2f, _) = ctx.sub_circuit(maxwidth_config, blake2f_circuit, params);
 
@@ -1474,10 +1472,10 @@ fn main() {
     let input2 = InputValuesParse::new(String::from("0000000c48c9bdf267e6096a3ba7ca8485ae67bb2bf894fe72f36e3cf1361d5f3af54fa5d182e6ad7f520e511f6c3e2b8c68059b6bbd41fbabd9831f79217e1319cde05b61626300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000"));
     let input3 = InputValuesParse::new(String::from("0000000048c9bdf267e6096a3ba7ca8485ae67bb2bf894fe72f36e3cf1361d5f3af54fa5d182e6ad7f520e511f6c3e2b8c68059b6bbd41fbabd9831f79217e1319cde05b61626300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000001"));
     let input4 = InputValuesParse::new(String::from("0000000148c9bdf267e6096a3ba7ca8485ae67bb2bf894fe72f36e3cf1361d5f3af54fa5d182e6ad7f520e511f6c3e2b8c68059b6bbd41fbabd9831f79217e1319cde05b61626300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000001"));
-    
+
     let multi_rounds = vec![input1.rounds, input2.rounds, input3.rounds, input4.rounds];
     let muilt_inputs = vec![input1, input2, input3, input4];
-    
+
     let super_circuit = blake2f_super_circuit::<Fr>(muilt_inputs.len(), multi_rounds);
     let compiled = chiquitoSuperCircuit2Halo2(&super_circuit);
 

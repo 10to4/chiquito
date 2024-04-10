@@ -75,7 +75,6 @@ pub const XOR_VALUES: [u8; XOR_4SPLIT_64BITS as usize] = [
     2, 1, 0,
 ];
 
-
 pub fn u64_to_string(inputs: &[u64; 4]) -> [String; 4] {
     inputs
         .iter()
@@ -1204,7 +1203,6 @@ fn blake2f_circuit<F: PrimeField + Hash>(
     ctx.pragma_num_steps(MIXING_ROUNDS as usize + 2);
 
     ctx.trace(move |ctx, values| {
-
         let mut values = values.clone();
         let h_split_4bits_vec = split_to_4bits_values::<F>(&values.h_vec_values);
         let m_split_4bits_vec = split_to_4bits_values::<F>(&values.m_vec_values);
@@ -1353,7 +1351,8 @@ fn blake2f_circuit<F: PrimeField + Hash>(
             values.v_vec_values = v_mid4_vec_values.clone();
         }
 
-        let output_vec_values: Vec<u64> = values.h_vec_values
+        let output_vec_values: Vec<u64> = values
+            .h_vec_values
             .iter()
             .zip(
                 values.v_vec_values[0..8]
@@ -1368,11 +1367,13 @@ fn blake2f_circuit<F: PrimeField + Hash>(
             v_vec: values.v_vec_values.iter().map(|&v| F::from(v)).collect(),
             h_vec: values.h_vec_values.iter().map(|&v| F::from(v)).collect(),
             output_vec: output_vec_values.iter().map(|&v| F::from(v)).collect(),
-            v_split_bit_vec: values.v_vec_values
+            v_split_bit_vec: values
+                .v_vec_values
                 .iter()
                 .map(|&v| split_value_4bits(v as u128, SPLIT_64BITS))
                 .collect(),
-            h_split_bit_vec: values.h_vec_values
+            h_split_bit_vec: values
+                .h_vec_values
                 .iter()
                 .map(|&v| split_value_4bits(v as u128, SPLIT_64BITS))
                 .collect(),
@@ -1431,18 +1432,14 @@ fn blake2f_super_circuit<F: PrimeField + Hash>() -> SuperCircuit<F, InputValuesP
 }
 
 fn main() {
-
     let inputs = InputValuesParse::new(String::from("0000000c48c9bdf267e6096a3ba7ca8485ae67bb2bf894fe72f36e3cf1361d5f3af54fa5d182e6ad7f520e511f6c3e2b8c68059b6bbd41fbabd9831f79217e1319cde05b61626300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000001"));
-
 
     let super_circuit = blake2f_super_circuit::<Fr>();
     let compiled = chiquitoSuperCircuit2Halo2(&super_circuit);
 
-    let circuit = ChiquitoHalo2SuperCircuit::new(
-        compiled,
-        super_circuit.get_mapping().generate(inputs),
-    );
-    
+    let circuit =
+        ChiquitoHalo2SuperCircuit::new(compiled, super_circuit.get_mapping().generate(inputs));
+
     let prover = MockProver::run(9, &circuit, Vec::new()).unwrap();
     let result = prover.verify();
 
