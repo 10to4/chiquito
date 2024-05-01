@@ -174,33 +174,33 @@ fn main() {
         }
     }
 
-    // hyperplonk boilerplate
-    use hyperplonk_benchmark::proof_system::{bench_plonkish_backend, System};
-    use plonkish_backend::{
-        backend,
-        halo2_curves::bn256::{Bn256, Fr},
-        pcs::{multilinear, univariate},
-    };
-    // get Chiquito ir
-    let (circuit, assignment_generator, _) = fibo_circuit::<Fr>();
-    // get assignments
-    let assignments = assignment_generator.unwrap().generate(());
-    // get hyperplonk circuit
-    let mut hyperplonk_circuit = ChiquitoHyperPlonkCircuit::new(4, circuit);
-    hyperplonk_circuit.set_assignment(assignments);
+    // // hyperplonk boilerplate
+    // use hyperplonk_benchmark::proof_system::{bench_plonkish_backend, System};
+    // use plonkish_backend::{
+    //     backend,
+    //     halo2_curves::bn256::{Bn256, Fr},
+    //     pcs::{multilinear, univariate},
+    // };
+    // // get Chiquito ir
+    // let (circuit, assignment_generator, _) = fibo_circuit::<Fr>();
+    // // get assignments
+    // let assignments = assignment_generator.unwrap().generate(());
+    // // get hyperplonk circuit
+    // let mut hyperplonk_circuit = ChiquitoHyperPlonkCircuit::new(4, circuit);
+    // hyperplonk_circuit.set_assignment(assignments);
 
-    type GeminiKzg = multilinear::Gemini<univariate::UnivariateKzg<Bn256>>;
-    type HyperPlonk = backend::hyperplonk::HyperPlonk<GeminiKzg>;
-    bench_plonkish_backend::<HyperPlonk, Fr>(System::HyperPlonk, 4, &hyperplonk_circuit);
+    // type GeminiKzg = multilinear::Gemini<univariate::UnivariateKzg<Bn256>>;
+    // type HyperPlonk = backend::hyperplonk::HyperPlonk<GeminiKzg>;
+    // bench_plonkish_backend::<HyperPlonk, Fr>(System::HyperPlonk, 4, &hyperplonk_circuit);
 
-    // pil boilerplate
-    use chiquito::pil::backend::powdr_pil::chiquito2Pil;
+    // // pil boilerplate
+    // use chiquito::pil::backend::powdr_pil::chiquito2Pil;
 
-    let (_, wit_gen, circuit) = fibo_circuit::<Fr>();
-    let pil = chiquito2Pil(
-        circuit,
-        Some(wit_gen.unwrap().generate_trace_witness(())),
-        String::from("FiboCircuit"),
-    );
-    print!("{}", pil);
+    // let (_, wit_gen, circuit) = fibo_circuit::<Fr>();
+    // let pil = chiquito2Pil(
+    //     circuit,
+    //     Some(wit_gen.unwrap().generate_trace_witness(())),
+    //     String::from("FiboCircuit"),
+    // );
+    // print!("{}", pil);
 }
