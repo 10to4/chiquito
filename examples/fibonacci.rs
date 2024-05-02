@@ -4,10 +4,7 @@ use chiquito::{
     field::Field,
     frontend::dsl::circuit, // main function for constructing an AST circuit
     plonkish::{
-        backend::{
-            halo2::{chiquito2Halo2, ChiquitoHalo2Circuit},
-            hyperplonk::ChiquitoHyperPlonkCircuit,
-        },
+        backend::halo2::{chiquito2Halo2, ChiquitoHalo2Circuit},
         compiler::{
             cell_manager::SingleRowCellManager, // input for constructing the compiler
             compile,                            // input for constructing the compiler
@@ -25,7 +22,7 @@ use chiquito::{
     poly::ToField,
     sbpir::SBPIR,
 };
-use halo2_proofs::dev::MockProver;
+use halo2_proofs::{dev::MockProver, halo2curves::bn256::Fr};
 
 // the main circuit function: returns the compiled IR of a Chiquito circuit
 // Generic types F, (), (u64, 64) stand for:
