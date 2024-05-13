@@ -29,7 +29,7 @@ pub const R1: u64 = 32;
 pub const R2: u64 = 24;
 pub const R3: u64 = 16;
 pub const R4: u64 = 63;
-pub const MIXING_ROUNDS: u64 = 12;
+// pub const MIXING_ROUNDS: u64 = 12;
 pub const SPLIT_64BITS: u64 = 16;
 pub const BASE_4BITS: u64 = 16;
 pub const XOR_4SPLIT_64BITS: u64 = SPLIT_64BITS * SPLIT_64BITS;
@@ -229,6 +229,7 @@ fn blake2f_xor_4bits_table<F: PrimeField + Hash>(
 
 #[derive(Clone, Copy)]
 struct CircuitParams {
+    pub total_rounds: usize,
     pub iv_table: LookupTable,
     pub bits_table: LookupTable,
     pub xor_4bits_table: LookupTable,
@@ -283,6 +284,7 @@ impl CircuitParams {
 
 struct PreInput<F> {
     round: F,
+    total_rounds: F,
     t0: F,
     t1: F,
     f: F,
@@ -298,6 +300,7 @@ struct PreInput<F> {
 
 struct GInput<F> {
     round: F,
+    total_rounds: F,
     v_vec: Vec<F>,
     h_vec: Vec<F>,
     m_vec: Vec<F>,
@@ -578,6 +581,7 @@ fn blake2f_circuit<F: PrimeField + Hash>(
         .map(|i| ctx.forward(format!("m_vec[{}]", i).as_str()))
         .collect();
     let round = ctx.forward("round");
+    let total_rounds = ctx.forward("total_rounds");
 
     let blake2f_pre_step = ctx.step_type_def("blake2f_pre_step", |ctx| {
         let v_vec = v_vec.clone();
@@ -716,15 +720,17 @@ fn blake2f_circuit<F: PrimeField + Hash>(
             }
             // check m_vec m_vec.next
             for &m in m_vec.iter() {
-                ctx.transition(eq(m, m.next()));
+                ctx.transition(eq((round - total_rounds) * (m.next() - m), 0));
             }
 
             ctx.constr(eq(round, 0));
             ctx.transition(eq(round, round.next()));
+            ctx.transition(eq(total_rounds, total_rounds.next()));
         });
 
         ctx.wg(move |ctx, inputs: PreInput<F>| {
             ctx.assign(round, inputs.round);
+            ctx.assign(total_rounds, inputs.total_rounds);
             ctx.assign(t0, inputs.t0);
             ctx.assign(t1, inputs.t1);
             ctx.assign(f, inputs.f);
@@ -780,7 +786,7 @@ fn blake2f_circuit<F: PrimeField + Hash>(
         })
     });
 
-    let blake2f_g_setup_vec: Vec<StepTypeWGHandler<F, _, _>> = (0..MIXING_ROUNDS as usize)
+    let blake2f_g_setup_vec: Vec<StepTypeWGHandler<F, _, _>> = (0..params.total_rounds as usize)
         .map(|r| {
             ctx.step_type_def(format!("blake2f_g_setup_{}", r), |ctx| {
                 let v_vec = v_vec.clone();
@@ -967,16 +973,17 @@ fn blake2f_circuit<F: PrimeField + Hash>(
                         ctx.transition(eq(h, h.next()));
                     }
                     // check m_vec m_vec.next()
-                    if r < MIXING_ROUNDS as usize - 1 {
-                        for &m in m_vec.iter() {
-                            ctx.transition(eq(m, m.next()));
-                        }
+                    for &m in m_vec.iter() {
+                        ctx.transition(eq((round + 1 - total_rounds) * (m.next() - m), 0));
                     }
                     ctx.transition(eq(round + 1, round.next()));
+                    ctx.transition(eq(total_rounds, total_rounds.next()));
+                    
                 });
 
                 ctx.wg(move |ctx, inputs: GInput<F>| {
                     ctx.assign(round, inputs.round);
+                    ctx.assign(total_rounds, inputs.total_rounds);
                     for (&q, &v) in wg_v_vec.iter().zip(inputs.v_vec.iter()) {
                         ctx.assign(q, v)
                     }
@@ -1155,11 +1162,12 @@ fn blake2f_circuit<F: PrimeField + Hash>(
                 }
                 ctx.constr(eq(output, final_4bits_sum_value));
             }
-            ctx.constr(eq(round, MIXING_ROUNDS));
+            ctx.constr(eq(round, total_rounds));
         });
 
         ctx.wg(move |ctx, inputs: FinalInput<F>| {
             ctx.assign(round, inputs.round);
+            ctx.assign(total_rounds, inputs.round);
             for (&q, &v) in wg_v_vec.iter().zip(inputs.v_vec.iter()) {
                 ctx.assign(q, v)
             }
@@ -1200,7 +1208,7 @@ fn blake2f_circuit<F: PrimeField + Hash>(
 
     ctx.pragma_first_step(&blake2f_pre_step);
     ctx.pragma_last_step(&blake2f_final_step);
-    ctx.pragma_num_steps(MIXING_ROUNDS as usize + 2);
+    ctx.pragma_num_steps(params.total_rounds as usize + 2);
 
     ctx.trace(move |ctx, values| {
         let mut values = values.clone();
@@ -1219,6 +1227,7 @@ fn blake2f_circuit<F: PrimeField + Hash>(
 
         let pre_inputs = PreInput {
             round: F::ZERO,
+            total_rounds: F::from(values.rounds as u64),
             t0: F::from(values.t_vec_values[0]),
             t1: F::from(values.t_vec_values[1]),
             f: F::from(if values.f { 1 } else { 0 }),
@@ -1331,6 +1340,7 @@ fn blake2f_circuit<F: PrimeField + Hash>(
 
             let ginputs = GInput {
                 round: F::from(r as u64),
+                total_rounds: F::from(values.rounds as u64),
                 v_vec: values.v_vec_values.iter().map(|&v| F::from(v)).collect(),
                 h_vec: values.h_vec_values.iter().map(|&v| F::from(v)).collect(),
                 m_vec: values.m_vec_values.iter().map(|&v| F::from(v)).collect(),
@@ -1398,7 +1408,7 @@ fn blake2f_circuit<F: PrimeField + Hash>(
     })
 }
 
-fn blake2f_super_circuit<F: PrimeField + Hash>() -> SuperCircuit<F, InputValuesParse> {
+fn blake2f_super_circuit<F: PrimeField + Hash>(total_rounds: usize) -> SuperCircuit<F, InputValuesParse> {
     super_circuit::<F, InputValuesParse, _>("blake2f", |ctx| {
         let single_config = config(SingleRowCellManager {}, SimpleStepSelectorBuilder {});
         let (_, iv_table) = ctx.sub_circuit(single_config.clone(), blake2f_iv_table, IV_LEN);
@@ -1419,9 +1429,11 @@ fn blake2f_super_circuit<F: PrimeField + Hash>() -> SuperCircuit<F, InputValuesP
         );
 
         let params = CircuitParams {
+            total_rounds,
             iv_table,
             bits_table,
             xor_4bits_table,
+            
         };
         let (blake2f, _) = ctx.sub_circuit(maxwidth_config, blake2f_circuit, params);
 
@@ -1432,9 +1444,10 @@ fn blake2f_super_circuit<F: PrimeField + Hash>() -> SuperCircuit<F, InputValuesP
 }
 
 fn main() {
-    let inputs = InputValuesParse::new(String::from("0000000c48c9bdf267e6096a3ba7ca8485ae67bb2bf894fe72f36e3cf1361d5f3af54fa5d182e6ad7f520e511f6c3e2b8c68059b6bbd41fbabd9831f79217e1319cde05b61626300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000001"));
-
-    let super_circuit = blake2f_super_circuit::<Fr>();
+    // let inputs = InputValuesParse::new(String::from("0000000c48c9bdf267e6096a3ba7ca8485ae67bb2bf894fe72f36e3cf1361d5f3af54fa5d182e6ad7f520e511f6c3e2b8c68059b6bbd41fbabd9831f79217e1319cde05b61626300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000001"));
+    let inputs = InputValuesParse::new(String::from("0000000c48c9bdf267e6096a3ba7ca8485ae67bb2bf894fe72f36e3cf1361d5f3af54fa5d182e6ad7f520e511f6c3e2b8c68059b6bbd41fbabd9831f79217e1319cde05b61626300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000"));
+    
+    let super_circuit = blake2f_super_circuit::<Fr>(inputs.rounds as usize);
     let compiled = chiquitoSuperCircuit2Halo2(&super_circuit);
 
     let circuit =
