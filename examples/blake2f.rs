@@ -978,7 +978,6 @@ fn blake2f_circuit<F: PrimeField + Hash>(
                     }
                     ctx.transition(eq(round + 1, round.next()));
                     ctx.transition(eq(total_rounds, total_rounds.next()));
-                    
                 });
 
                 ctx.wg(move |ctx, inputs: GInput<F>| {
@@ -1408,7 +1407,9 @@ fn blake2f_circuit<F: PrimeField + Hash>(
     })
 }
 
-fn blake2f_super_circuit<F: PrimeField + Hash>(total_rounds: usize) -> SuperCircuit<F, InputValuesParse> {
+fn blake2f_super_circuit<F: PrimeField + Hash>(
+    total_rounds: usize,
+) -> SuperCircuit<F, InputValuesParse> {
     super_circuit::<F, InputValuesParse, _>("blake2f", |ctx| {
         let single_config = config(SingleRowCellManager {}, SimpleStepSelectorBuilder {});
         let (_, iv_table) = ctx.sub_circuit(single_config.clone(), blake2f_iv_table, IV_LEN);
@@ -1433,7 +1434,6 @@ fn blake2f_super_circuit<F: PrimeField + Hash>(total_rounds: usize) -> SuperCirc
             iv_table,
             bits_table,
             xor_4bits_table,
-            
         };
         let (blake2f, _) = ctx.sub_circuit(maxwidth_config, blake2f_circuit, params);
 
@@ -1444,9 +1444,12 @@ fn blake2f_super_circuit<F: PrimeField + Hash>(total_rounds: usize) -> SuperCirc
 }
 
 fn main() {
-    // let inputs = InputValuesParse::new(String::from("0000000c48c9bdf267e6096a3ba7ca8485ae67bb2bf894fe72f36e3cf1361d5f3af54fa5d182e6ad7f520e511f6c3e2b8c68059b6bbd41fbabd9831f79217e1319cde05b61626300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000001"));
+    // let inputs =
+    // InputValuesParse::new(String::from("
+    // 0000000c48c9bdf267e6096a3ba7ca8485ae67bb2bf894fe72f36e3cf1361d5f3af54fa5d182e6ad7f520e511f6c3e2b8c68059b6bbd41fbabd9831f79217e1319cde05b61626300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000001"
+    // ));
     let inputs = InputValuesParse::new(String::from("0000000c48c9bdf267e6096a3ba7ca8485ae67bb2bf894fe72f36e3cf1361d5f3af54fa5d182e6ad7f520e511f6c3e2b8c68059b6bbd41fbabd9831f79217e1319cde05b61626300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000"));
-    
+
     let super_circuit = blake2f_super_circuit::<Fr>(inputs.rounds as usize);
     let compiled = chiquitoSuperCircuit2Halo2(&super_circuit);
 
